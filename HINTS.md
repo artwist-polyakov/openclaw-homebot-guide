@@ -169,25 +169,40 @@ Telegram парсит `HEARTBEAT.md` как ссылку (домен `.md`). В 
 
 ---
 
-## Heartbeat — автоматическое пробуждение бота
+## Heartbeat — `target: "last"` отправляет в ЛС, а не в группу
+
+**Проблема:** `target: "last"` берёт `deliveryContext` из главной сессии агента. Если первое взаимодействие было в ЛС — heartbeat навсегда застревает в ЛС и самоподдерживается (heartbeat создаёт сессию → сессия указывает на ЛС → следующий heartbeat идёт туда же).
+
+**Решение:** Для гарантированной доставки в группу используйте `target: "telegram"` + `to` на уровне конкретного агента:
 
 ```json
 {
   "agents": {
-    "defaults": {
-      "heartbeat": {
-        "every": "15m",
-        "target": "last",
-        "activeHours": {
-          "start": "08:00",
-          "end": "23:00",
-          "timezone": "Europe/Moscow"
+    "list": [
+      {
+        "id": "main",
+        "name": "FoodHelper",
+        "heartbeat": {
+          "every": "15m",
+          "target": "telegram",
+          "to": "-100XXXXXXXXXX",
+          "activeHours": {
+            "start": "08:00",
+            "end": "23:00",
+            "timezone": "Europe/Moscow"
+          }
         }
       }
-    }
+    ]
   }
 }
 ```
+
+| Значение target | Куда шлёт |
+|-----------------|-----------|
+| `"last"` | deliveryContext главной сессии (часто ЛС!) |
+| `"telegram"` + `to` | Конкретный Telegram-чат (рекомендуется) |
+| `"none"` | Никуда — heartbeat работает, но не отправляет |
 
 **Известная проблема:** Issue #2935 — heartbeat перестаёт тикать после context compression. Workaround: периодический рестарт контейнера.
 
@@ -236,6 +251,39 @@ curl с полным набором кук не получает блок `#prod
 ## `fetch failed` в OpenClaw — известный баг
 
 Известный баг (GitHub issues #7553, #5199, #4425). Non-fatal — бот продолжает работать.
+
+---
+
+## Мульти-агенты: chown обязателен
+
+**Проблема:** При создании workspace и agent dir для нового агента файлы принадлежат root. Контейнер OpenClaw бежит от uid=1000 (node) и получает `EACCES: permission denied`.
+
+**Решение:** После создания директорий:
+```bash
+chown -R 1000:1000 /opt/openclaw/config/workspace-<name>
+chown -R 1000:1000 /opt/openclaw/config/agents/<name>
+```
+
+---
+
+## Мульти-агенты: bindings для маршрутизации
+
+**Проблема:** Добавили нового агента, но все сообщения по-прежнему идут к default-агенту.
+
+**Решение:** Добавить binding в `openclaw.json`:
+```json
+"bindings": [
+  {
+    "agentId": "familyoffice",
+    "match": {
+      "channel": "telegram",
+      "peer": { "kind": "group", "id": "-100XXXXXXXXXX" }
+    }
+  }
+]
+```
+
+Всё что не попало в bindings идёт к агенту с `"default": true`.
 
 ---
 

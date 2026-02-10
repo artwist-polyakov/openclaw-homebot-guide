@@ -14,13 +14,19 @@
 ├── docker-compose.yml          # Docker-конфиг (порты, env, образ)
 ├── update.sh                   # Скрипт автообновления
 ├── config/
-│   ├── openclaw.json           # Главный конфиг (модель, каналы, безопасность)
-│   ├── agents/main/agent/
-│   │   └── auth-profiles.json  # API-ключ LLM-провайдера
+│   ├── openclaw.json           # Главный конфиг (модель, каналы, безопасность, агенты, bindings)
+│   ├── agents/
+│   │   ├── main/agent/
+│   │   │   └── auth-profiles.json      # API-ключ для FoodHelper (Kimi)
+│   │   └── familyoffice/agent/
+│   │       └── auth-profiles.json      # API-ключ для FamilyOffice (Anthropic)
+│   ├── workspace-familyoffice/
+│   │   └── AGENTS.md                   # Персона FamilyOffice-агента
 │   ├── credentials/            # Telegram allowlists, pairing
 │   └── agents/main/sessions/   # Сессии (история чатов)
-├── workspace/
+├── workspace/                  # Workspace FoodHelper (main)
 │   ├── AGENTS.md               # Персона бота (тон, поведение, правила)
+│   ├── HEARTBEAT.md            # Задачи heartbeat (привязан к семейному чату)
 │   ├── IDENTITY.md             # Имя и эмодзи
 │   └── skills/vkusvill/
 │       ├── SKILL.md            # Инструкция для бота по ВкусВилл
@@ -106,19 +112,40 @@ Gateway token хранится в `openclaw.json` → `gateway.token`.
 
 ## Heartbeat (автопробуждение)
 
-Бот просыпается каждые 15 мин (08:00–23:00 МСК), проверяет `HEARTBEAT.md` и реагирует если есть задачи. Алерты идут в последний активный чат. Настройка в `openclaw.json`:
+Heartbeat привязан к конкретному агенту и чату. FoodHelper просыпается каждые 15 мин (08:00–23:00 МСК), проверяет `HEARTBEAT.md` и отправляет сообщения в семейный чат.
+
+**Важно:** `target: "last"` отправляет в `deliveryContext` главной сессии агента, что часто оказывается ЛС, а не группой. Для гарантированной доставки в группу используйте `target: "telegram"` + `to: "<chat_id>"`.
+
 ```json
-"heartbeat": {
-  "every": "15m",
-  "target": "last",
-  "activeHours": {
-    "start": "08:00",
-    "end": "23:00",
-    "timezone": "Europe/Moscow"
-  }
+"agents": {
+  "list": [
+    {
+      "id": "main",
+      "name": "FoodHelper",
+      "heartbeat": {
+        "every": "15m",
+        "target": "telegram",
+        "to": "-100XXXXXXXXXX",
+        "activeHours": {
+          "start": "08:00",
+          "end": "23:00",
+          "timezone": "Europe/Moscow"
+        }
+      }
+    }
+  ]
 }
 ```
+
 `HEARTBEAT_OK` — не доставляется (нет спама). Алерт уходит только когда бот решил что-то сообщить.
+
+### Опции target
+
+| Значение | Куда шлёт |
+|----------|-----------|
+| `"last"` | Последний канал в deliveryContext сессии (часто ЛС!) |
+| `"telegram"` + `to` | Конкретный Telegram-чат (рекомендуется для групп) |
+| `"none"` | Никуда — heartbeat работает, но не отправляет |
 
 ## Безопасность
 
@@ -148,7 +175,7 @@ Gateway token хранится в `openclaw.json` → `gateway.token`.
 |--------|-----------------|---------|
 | Docker prune | Вс 4:00 | `docker system prune -af --filter "until=168h"` |
 | Обновление OpenClaw | Пн 5:00 | `/opt/openclaw/update.sh` |
-| VV-checker keepalive | Ежедневно 10:00 | `curl -s http://127.0.0.1:18790/check?url=...` |
+| VV-checker keepalive | 4 раза/день (04,10,16,22) | `curl -s http://127.0.0.1:18790/check?url=...` |
 
 Логи: `/var/log/docker-prune.log`, `/var/log/openclaw-update.log`
 
@@ -161,6 +188,7 @@ Gateway token хранится в `openclaw.json` → `gateway.token`.
 OPENCLAW_GATEWAY_TOKEN=...
 TELEGRAM_BOT_TOKEN=...
 KIMI_API_KEY=...
+ANTHROPIC_API_KEY=...
 PERPLEXITY_API_KEY=...
 OPENAI_API_KEY=...
 TZ=Europe/Moscow
@@ -168,9 +196,59 @@ TZ=Europe/Moscow
 
 Docker-compose подтягивает через `env_file: .env`. **Важно:** при изменении `.env` нужен `docker compose down && docker compose up -d openclaw-gateway` (не просто `docker restart` — он не перечитывает env).
 
+## Мульти-агенты
+
+Один Gateway может хостить несколько изолированных агентов. Каждый агент — отдельный "мозг" со своим workspace, моделью, heartbeat и историей сессий.
+
+### Текущая конфигурация
+
+| Агент | displayName | Модель | Назначение |
+|-------|-------------|--------|------------|
+| `main` | FoodHelper | `kimi-coding/k2p5` | Питание, ВкусВилл, семейный чат |
+| `familyoffice` | FamilyOffice | `anthropic/claude-sonnet-4-5` | Организация, фотосессии, семейный офис |
+
+### Bindings (маршрутизация)
+
+Bindings определяют какой агент обслуживает какой чат:
+
+```json
+"bindings": [
+  {
+    "agentId": "familyoffice",
+    "match": {
+      "channel": "telegram",
+      "peer": { "kind": "group", "id": "-100XXXXXXXXXX" }
+    }
+  }
+]
+```
+
+Всё что не попало в bindings — идёт к default-агенту (main/FoodHelper).
+
+### Добавить нового агента
+
+1. Добавить в `agents.list` в `openclaw.json`
+2. Создать workspace: `mkdir /opt/openclaw/config/workspace-<name>`
+3. Написать `AGENTS.md` в workspace
+4. Создать agent dir: `mkdir -p /opt/openclaw/config/agents/<name>/agent`
+5. Создать `auth-profiles.json` (или оставить пустым `{"profiles":[]}` — будет использовать env)
+6. **Важно:** `chown -R 1000:1000` на workspace и agent dir (контейнер бежит от uid=1000)
+7. Добавить binding если нужно
+8. `docker restart openclaw-gateway`
+
+### Auth-profiles: изоляция ключей
+
+Каждый агент читает свой `auth-profiles.json`:
+```
+~/.openclaw/agents/main/agent/auth-profiles.json          → Kimi key
+~/.openclaw/agents/familyoffice/agent/auth-profiles.json   → Anthropic key
+```
+Если `auth-profiles.json` пустой (`{"profiles":[]}`), агент берёт ключ из env-переменных.
+
 ## Провайдер LLM
 
-Текущий: **Kimi Coding** (`kimi-coding/k2p5`) — встроенный провайдер OpenClaw.
+Текущий для main: **Kimi Coding** (`kimi-coding/k2p5`) — встроенный провайдер OpenClaw.
+FamilyOffice: **Anthropic Claude Sonnet 4.5** (`anthropic/claude-sonnet-4-5`).
 
 ### Как настроен Kimi Coding
 
