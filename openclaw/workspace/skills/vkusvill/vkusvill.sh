@@ -10,6 +10,7 @@ set -euo pipefail
 
 MCP_URL="https://mcp001.vkusvill.ru/mcp"
 MCP_TIMEOUT=30
+MAX_RETRIES=1
 
 init_session() {
   local resp
@@ -19,14 +20,14 @@ init_session() {
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"openclaw-vkusvill","version":"1.0"}}}')
   SESSION_ID=$(echo "$resp" | grep -i 'mcp-session-id' | awk '{print $2}' | tr -d '\r')
   if [ -z "$SESSION_ID" ]; then
-    echo '{"error":"MCP session init failed (timeout or server unavailable)"}' >&2
-    exit 1
+    return 1
   fi
   curl -s --max-time $MCP_TIMEOUT -X POST "$MCP_URL" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "Mcp-Session-Id: $SESSION_ID" \
     -d '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' > /dev/null
+  return 0
 }
 
 call_tool() {
@@ -37,6 +38,45 @@ call_tool() {
     -H 'Accept: application/json, text/event-stream' \
     -H "Mcp-Session-Id: $SESSION_ID" \
     -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool_name\",\"arguments\":$args}}"
+}
+
+# Retry wrapper: init session + call tool, retry once on failure
+call_tool_with_retry() {
+  local tool_name="$1"
+  local args="$2"
+  local attempt=0
+  local result=""
+
+  while [ $attempt -le $MAX_RETRIES ]; do
+    if [ $attempt -gt 0 ]; then
+      sleep 2
+      SESSION_ID=""
+    fi
+
+    if [ -z "${SESSION_ID:-}" ]; then
+      if ! init_session; then
+        attempt=$((attempt + 1))
+        continue
+      fi
+    fi
+
+    result=$(call_tool "$tool_name" "$args" 2>/dev/null) || true
+
+    if [ -n "$result" ] && ! echo "$result" | grep -q '"error".*timeout\|"error".*unavailable'; then
+      echo "$result"
+      return 0
+    fi
+
+    attempt=$((attempt + 1))
+    SESSION_ID=""
+  done
+
+  if [ -n "$result" ]; then
+    echo "$result"
+  else
+    echo '{"error":"MCP request failed after retry (timeout or server unavailable)"}' >&2
+  fi
+  return 1
 }
 
 ACTION="${1:-help}"
@@ -55,7 +95,15 @@ case "$ACTION" in
     else
       PRODUCT_URL="$INPUT"
     fi
-    CHECK_RESULT=$(curl -s --max-time 45 "http://host.docker.internal:18790/check?url=${PRODUCT_URL}" 2>/dev/null)
+    # Retry check request once on empty response
+    CHECK_RESULT=""
+    for attempt in 0 1; do
+      CHECK_RESULT=$(curl -s --max-time 45 "http://host.docker.internal:18790/check?url=${PRODUCT_URL}" 2>/dev/null) || true
+      if [ -n "$CHECK_RESULT" ]; then
+        break
+      fi
+      [ $attempt -eq 0 ] && sleep 3
+    done
     if [ -z "$CHECK_RESULT" ]; then
       echo "NOT_AVAILABLE|error|Сервис проверки наличия недоступен"
       exit 1
@@ -77,21 +125,20 @@ else:
 "
     ;;
   *)
-    init_session
     case "$ACTION" in
       search)
         QUERY="${1:-}"
         PAGE="${2:-1}"
         SORT="${3:-popularity}"
-        call_tool "vkusvill_products_search" "{\"q\":\"$QUERY\",\"page\":$PAGE,\"sort\":\"$SORT\"}"
+        call_tool_with_retry "vkusvill_products_search" "{\"q\":\"$QUERY\",\"page\":$PAGE,\"sort\":\"$SORT\"}"
         ;;
       details)
         ID="${1:-}"
-        call_tool "vkusvill_product_details" "{\"id\":$ID}"
+        call_tool_with_retry "vkusvill_product_details" "{\"id\":$ID}"
         ;;
       cart)
         PRODUCTS="${1:-[]}"
-        call_tool "vkusvill_cart_link_create" "{\"products\":$PRODUCTS}"
+        call_tool_with_retry "vkusvill_cart_link_create" "{\"products\":$PRODUCTS}"
         ;;
       *)
         echo "Usage: vkusvill.sh <search|details|check|cart> [args...]"
