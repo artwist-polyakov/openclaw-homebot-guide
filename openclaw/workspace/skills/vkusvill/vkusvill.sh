@@ -9,15 +9,20 @@
 set -euo pipefail
 
 MCP_URL="https://mcp001.vkusvill.ru/mcp"
+MCP_TIMEOUT=30
 
 init_session() {
   local resp
-  resp=$(curl -s -i -X POST "$MCP_URL" \
+  resp=$(curl -s --max-time $MCP_TIMEOUT -i -X POST "$MCP_URL" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"openclaw-vkusvill","version":"1.0"}}}')
   SESSION_ID=$(echo "$resp" | grep -i 'mcp-session-id' | awk '{print $2}' | tr -d '\r')
-  curl -s -X POST "$MCP_URL" \
+  if [ -z "$SESSION_ID" ]; then
+    echo '{"error":"MCP session init failed (timeout or server unavailable)"}' >&2
+    exit 1
+  fi
+  curl -s --max-time $MCP_TIMEOUT -X POST "$MCP_URL" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "Mcp-Session-Id: $SESSION_ID" \
@@ -27,7 +32,7 @@ init_session() {
 call_tool() {
   local tool_name="$1"
   local args="$2"
-  curl -s -X POST "$MCP_URL" \
+  curl -s --max-time $MCP_TIMEOUT -X POST "$MCP_URL" \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "Mcp-Session-Id: $SESSION_ID" \
