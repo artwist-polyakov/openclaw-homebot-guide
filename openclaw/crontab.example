@@ -1,0 +1,11 @@
+# OpenClaw server crontab
+# Install: crontab -e and paste these lines
+
+# Docker cleanup — every Sunday 4:00 MSK
+0 4 * * 0 docker system prune -af --filter "until=168h" >> /var/log/docker-prune.log 2>&1
+
+# OpenClaw auto-update — every Monday 5:00 MSK
+0 5 * * 1 /opt/openclaw/update.sh
+
+# VV-checker session keepalive — every day 10:00 MSK
+0 10 * * * curl -s http://127.0.0.1:18790/check?url=https://vkusvill.ru/goods/pasta-orzo-s-kurinymi-frikadelkami-98052.html > /dev/null 2>&1

@@ -1,0 +1,15 @@
+[Unit]
+Description=VkusVill Availability Checker (Puppeteer)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vv-checker
+ExecStart=/usr/bin/node /opt/vv-checker/server.js
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

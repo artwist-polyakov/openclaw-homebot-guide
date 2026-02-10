@@ -1,0 +1,8 @@
+.env
+*.env
+cookies.json
+chrome-data/
+node_modules/
+sessions/
+credentials/
+auth-profiles.json

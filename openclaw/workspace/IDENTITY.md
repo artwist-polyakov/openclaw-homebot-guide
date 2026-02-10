@@ -1,0 +1,2 @@
+name: SashaDashaHomeBot
+emoji: 🏠

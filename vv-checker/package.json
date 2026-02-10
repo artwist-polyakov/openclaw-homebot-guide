@@ -1,0 +1,12 @@
+{
+  "name": "vv-checker",
+  "version": "1.0.0",
+  "description": "VkusVill availability checker - Puppeteer microservice",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "puppeteer": "^23.0.0"
+  }
+}
