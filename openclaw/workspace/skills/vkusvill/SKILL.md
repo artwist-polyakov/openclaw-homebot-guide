@@ -34,10 +34,10 @@ exec /home/node/.openclaw/workspace/skills/vkusvill/vkusvill.sh details 12345
 ### 3. Проверка наличия по адресу доставки
 
 ```bash
-exec /home/node/.openclaw/workspace/skills/vkusvill/vkusvill.sh check 98052
+exec /home/node/.openclaw/workspace/skills/vkusvill/vkusvill.sh check https://vkusvill.ru/goods/penne-s-gribami-i-ovoshchami-34511.html
 ```
 
-Принимает ID товара (число) или полный URL страницы товара.
+**ВАЖНО:** Всегда передавай полный URL товара из поля `url` результатов поиска или details. НЕ передавай числовой id — он может не совпадать с xmlid и проверка вернёт ошибку.
 
 Ответ: `AVAILABLE|кол-во|описание` или `NOT_AVAILABLE|0|описание`
 
@@ -58,7 +58,7 @@ exec /home/node/.openclaw/workspace/skills/vkusvill/vkusvill.sh cart '[{"xml_id"
 1. Пользователь просит найти продукт → используй `search`
 2. Покажи список: название, цена, рейтинг
 3. Если нужны КБЖУ/состав → используй `details` с id товара
-4. **Перед сборкой корзины** → проверь наличие через `check` с id товара
+4. **Перед сборкой корзины** → проверь наличие через `check` с полным URL товара (поле `url` из результатов поиска)
 5. Если товар `AVAILABLE` → добавляй в корзину
 6. Если `NOT_AVAILABLE` → сообщи пользователю и предложи альтернативу
 7. Собери корзину через `cart` и отдай ссылку
