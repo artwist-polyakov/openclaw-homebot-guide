@@ -287,11 +287,11 @@ cd /opt/openclaw && docker compose down && docker compose up -d openclaw-gateway
 
 В `openclaw.json` → `channels.telegram`:
 ```json
-"allowFrom": ["<TELEGRAM_USER_ID_1>", "<TELEGRAM_USER_ID_2>"]
+"allowFrom": ["<TELEGRAM_USER_ID>", "<TELEGRAM_USERNAME>"]
 ```
 
-- **`allowFrom`** — кто может писать в ЛС. Обязательно, иначе любой сможет использовать бота.
-- **`groupAllowFrom`** (опционально) — кто может тегать бота в группах. Если не указано — любой участник группы может вызвать бота через @mention. Настройка глобальная (на все группы), per-group фильтрации нет.
+- **`allowFrom`** — кто может взаимодействовать с ботом. Принимает числовые Telegram ID и юзернеймы. Влияет и на ЛС, и на группы — пользователь не из списка не сможет вызвать бота даже через @mention в группе.
+- **`groupAllowFrom`** (опционально) — отдельный список для групп. Если не указано, используется `allowFrom`. Настройка глобальная (на все группы), per-group фильтрации нет.
 
 ## Голосовые сообщения
 
