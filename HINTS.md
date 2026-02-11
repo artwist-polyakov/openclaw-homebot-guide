@@ -236,7 +236,38 @@ ufw allow from 172.17.0.0/16 to any port 18790 comment 'vv-checker from Docker'
 ufw allow from 172.18.0.0/16 to any port 18790 comment 'vv-checker from Docker compose'
 ```
 
-**Важно:** docker-compose создаёт свою сеть (`172.18.0.0/16`), а не default bridge (`172.17.0.0/16`). Нужны оба правила.
+**Важно:** Docker-сети могут меняться. Проверь подсеть контейнера:
+```bash
+docker inspect openclaw-gateway --format '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}'
+```
+Типичные подсети: `172.17.0.0/16` (default bridge), `172.18.0.0/16`, `172.23.0.0/16` (docker compose). Нужны правила для всех подсетей, откуда контейнер обращается к хосту.
+
+---
+
+## UFW блокирует vv-checker из контейнера (таймаут check)
+
+**Проблема:** `vkusvill.sh check` таймаутит из Docker-контейнера, хотя с хоста `curl http://127.0.0.1:18790/health` работает. Причина: контейнер на подсети `172.23.0.0/16` (`openclaw_default`), а UFW разрешает только `172.17` и `172.18`.
+
+**Диагностика:**
+```bash
+# Проверить подсеть контейнера:
+docker inspect openclaw-gateway --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{.Gateway}}{{end}}'
+# Проверить из контейнера:
+docker exec openclaw-gateway curl -s --max-time 5 http://host.docker.internal:18790/health
+```
+
+**Решение:** Добавить правило для актуальной подсети:
+```bash
+sudo ufw allow from 172.23.0.0/16 to any port 18790 comment 'vv-checker from openclaw_default network'
+```
+
+---
+
+## groupAllowFrom — глобальная настройка, не per-group
+
+**Проблема:** `groupAllowFrom` фильтрует отправителей во **всех** группах одинаково. Нельзя разрешить Гульназ в одной группе, но запретить в другой.
+
+**Решение:** Если нужен бот в группе с внешними участниками — убрать `groupAllowFrom` совсем. Безопасность обеспечивается через `requireMention: true` + контроль состава групп.
 
 ---
 

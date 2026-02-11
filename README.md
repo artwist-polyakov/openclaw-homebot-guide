@@ -155,7 +155,7 @@ Heartbeat привязан к конкретному агенту и чату. F
 | Gateway auth | token | openclaw.json |
 | DM policy | allowlist | openclaw.json |
 | DM scope | per-channel-peer (изоляция сессий) | openclaw.json |
-| Группы | requireMention: true | openclaw.json |
+| Группы | requireMention: true, без groupAllowFrom | openclaw.json |
 | Sandbox | off (внутри Docker) | openclaw.json |
 | mDNS | off | openclaw.json |
 
@@ -287,9 +287,11 @@ cd /opt/openclaw && docker compose down && docker compose up -d openclaw-gateway
 
 В `openclaw.json` → `channels.telegram`:
 ```json
-"allowFrom": ["<TELEGRAM_USER_ID_1>", "<TELEGRAM_USER_ID_2>"],
-"groupAllowFrom": ["<TELEGRAM_USER_ID_1>", "<TELEGRAM_USER_ID_2>"]
+"allowFrom": ["<TELEGRAM_USER_ID_1>", "<TELEGRAM_USER_ID_2>"]
 ```
+
+- **`allowFrom`** — кто может писать в ЛС. Обязательно, иначе любой сможет использовать бота.
+- **`groupAllowFrom`** (опционально) — кто может тегать бота в группах. Если не указано — любой участник группы может вызвать бота через @mention. Настройка глобальная (на все группы), per-group фильтрации нет.
 
 ## Голосовые сообщения
 
