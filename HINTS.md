@@ -261,6 +261,15 @@ docker exec openclaw-gateway curl -s --max-time 5 http://host.docker.internal:18
 sudo ufw allow from 172.23.0.0/16 to any port 18790 comment 'vv-checker from openclaw_default network'
 ```
 
+**Долгосрочный фикс:** Зафиксировать подсеть в `docker-compose.yml`, чтобы при `docker compose down && up` она не менялась:
+```yaml
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.23.0.0/16
+```
+
 ---
 
 ## groupAllowFrom — глобальная настройка, не per-group
