@@ -1,10 +1,9 @@
-# OpenClaw Telegram Bot — Руководство по администрированию
-
-Практический гайд по настройке и эксплуатации семейного Telegram-бота на базе [OpenClaw](https://github.com/openclaw/openclaw). Включает интеграцию с ВкусВилл (поиск, КБЖУ, проверка наличия, корзина), голосовые сообщения, heartbeat, веб-поиск через Perplexity и Puppeteer-микросервис для проверки наличия товаров.
+# SashaDashaHomeBot — Администрирование
 
 ## Сервер
 
-- **ОС:** Ubuntu 22.04, 2GB RAM, 30GB диск
+- **Хостинг:** VDSina, Ubuntu 22.04, 2GB RAM, 30GB диск
+- **IP:** см. SSH-скилл (`config/.env`)
 - **Docker:** 24.0.7 + Compose 2.21.0
 
 ## Структура на сервере
@@ -13,24 +12,19 @@
 /opt/openclaw/
 ├── docker-compose.yml          # Docker-конфиг (порты, env, образ)
 ├── update.sh                   # Скрипт автообновления
+├── vv-mcp-client.py            # Persistent MCP-клиент ВкусВилл (порт 18791)
 ├── config/
-│   ├── openclaw.json           # Главный конфиг (модель, каналы, безопасность, агенты, bindings)
-│   ├── agents/
-│   │   ├── main/agent/
-│   │   │   └── auth-profiles.json      # API-ключ для FoodHelper (Kimi)
-│   │   └── familyoffice/agent/
-│   │       └── auth-profiles.json      # API-ключ для FamilyOffice (Anthropic)
-│   ├── workspace-familyoffice/
-│   │   └── AGENTS.md                   # Персона FamilyOffice-агента
+│   ├── openclaw.json           # Главный конфиг (модель, каналы, безопасность)
+│   ├── agents/main/agent/
+│   │   └── auth-profiles.json  # API-ключ LLM-провайдера
 │   ├── credentials/            # Telegram allowlists, pairing
 │   └── agents/main/sessions/   # Сессии (история чатов)
-├── workspace/                  # Workspace FoodHelper (main)
+├── workspace/
 │   ├── AGENTS.md               # Персона бота (тон, поведение, правила)
-│   ├── HEARTBEAT.md            # Задачи heartbeat (привязан к семейному чату)
 │   ├── IDENTITY.md             # Имя и эмодзи
 │   └── skills/vkusvill/
 │       ├── SKILL.md            # Инструкция для бота по ВкусВилл
-│       └── vkusvill.sh         # Скрипт-обёртка MCP API ВкусВилл
+│       └── vkusvill.sh         # Скрипт-обёртка (вызывает vv-mcp-client + Puppeteer)
 └── repo/                       # Клон github.com/openclaw/openclaw
 ```
 
@@ -45,7 +39,9 @@ docker restart openclaw-gateway
 ### Поменять модель
 ```bash
 # В /opt/openclaw/config/openclaw.json поменять agents.defaults.model.primary
-# Доступные: kimi-coding/k2p5, anthropic/claude-opus-4-6, anthropic/claude-sonnet-4-5, anthropic/claude-haiku-4-5
+# Текущая: kimi-coding/k2p5 (Kimi Coding, Anthropic-совместимый API)
+# Доступные Anthropic: anthropic/claude-opus-4-6, anthropic/claude-sonnet-4-5, anthropic/claude-haiku-4-5
+# Для Anthropic: заменить KIMI_API_KEY на ANTHROPIC_API_KEY в .env
 nano /opt/openclaw/config/openclaw.json
 docker restart openclaw-gateway
 ```
@@ -75,6 +71,7 @@ docker restart openclaw-gateway
 
 ## Telegram
 
+- **Бот:** @sashadashahomebot
 - **DM Policy:** allowlist (только пользователи из списка)
 - **Группы:** отвечает только на @упоминания и реплаи
 
@@ -84,9 +81,9 @@ docker exec openclaw-gateway node dist/index.js pairing approve telegram <КОД
 ```
 
 ### Добавить бота в группу
-1. Добавить бота в группу
+1. Добавить @sashadashahomebot в группу
 2. Сделать админом (чтобы видел все сообщения) или отключить Privacy Mode через @BotFather → /setprivacy → Disable
-3. Тегать через @botname для вызова
+3. Тегать через @sashadashahomebot для вызова
 
 ### Ограничить конкретной группой
 В `openclaw.json` заменить `"*"` на ID группы:
@@ -108,44 +105,26 @@ ssh -L 18789:127.0.0.1:18789 <user>@<IP-сервера>
 
 Открыть: http://localhost:18789
 
-Gateway token хранится в `openclaw.json` → `gateway.token`.
+Gateway token:
+```
+5900ad829ff0c05e31954e9e32ca82bc147412fb5d2f49fd054de66c80f0629e
+```
 
 ## Heartbeat (автопробуждение)
 
-Heartbeat привязан к конкретному агенту и чату. FoodHelper просыпается каждые 15 мин (08:00–23:00 МСК), проверяет `HEARTBEAT.md` и отправляет сообщения в семейный чат.
-
-**Важно:** `target: "last"` отправляет в `deliveryContext` главной сессии агента, что часто оказывается ЛС, а не группой. Для гарантированной доставки в группу используйте `target: "telegram"` + `to: "<chat_id>"`.
-
+Бот просыпается каждые 15 мин (08:00–23:00 МСК), проверяет `HEARTBEAT.md` и реагирует если есть задачи. Алерты идут в последний активный чат. Настройка в `openclaw.json`:
 ```json
-"agents": {
-  "list": [
-    {
-      "id": "main",
-      "name": "FoodHelper",
-      "heartbeat": {
-        "every": "15m",
-        "target": "telegram",
-        "to": "-100XXXXXXXXXX",
-        "activeHours": {
-          "start": "08:00",
-          "end": "23:00",
-          "timezone": "Europe/Moscow"
-        }
-      }
-    }
-  ]
+"heartbeat": {
+  "every": "15m",
+  "target": "last",
+  "activeHours": {
+    "start": "08:00",
+    "end": "23:00",
+    "timezone": "Europe/Moscow"
+  }
 }
 ```
-
 `HEARTBEAT_OK` — не доставляется (нет спама). Алерт уходит только когда бот решил что-то сообщить.
-
-### Опции target
-
-| Значение | Куда шлёт |
-|----------|-----------|
-| `"last"` | Последний канал в deliveryContext сессии (часто ЛС!) |
-| `"telegram"` + `to` | Конкретный Telegram-чат (рекомендуется для групп) |
-| `"none"` | Никуда — heartbeat работает, но не отправляет |
 
 ## Безопасность
 
@@ -155,9 +134,10 @@ Heartbeat привязан к конкретному агенту и чату. F
 | Gateway auth | token | openclaw.json |
 | DM policy | allowlist | openclaw.json |
 | DM scope | per-channel-peer (изоляция сессий) | openclaw.json |
-| Группы | requireMention: true, без groupAllowFrom | openclaw.json |
+| Группы | requireMention: true | openclaw.json |
 | Sandbox | off (внутри Docker) | openclaw.json |
 | mDNS | off | openclaw.json |
+| Модель | kimi-coding/k2p5 | openclaw.json |
 
 ### Изоляция DM-сессий
 
@@ -175,11 +155,10 @@ Heartbeat привязан к конкретному агенту и чату. F
 |--------|-----------------|---------|
 | Docker prune | Вс 4:00 | `docker system prune -af --filter "until=168h"` |
 | Обновление OpenClaw | Пн 5:00 | `/opt/openclaw/update.sh` |
-| VV-checker keepalive | 4 раза/день (04,10,16,22) | `curl -s http://127.0.0.1:18790/check?url=...` |
+| VV-checker keepalive | Ежедневно 10:00 | `curl -s http://127.0.0.1:18790/check?url=...` |
+| VV MCP Client | systemd (always) | `vv-mcp-client.service` — авторестарт |
 
 Логи: `/var/log/docker-prune.log`, `/var/log/openclaw-update.log`
-
-Пример crontab: [`openclaw/crontab.example`](openclaw/crontab.example)
 
 ## Секреты (.env)
 
@@ -188,7 +167,6 @@ Heartbeat привязан к конкретному агенту и чату. F
 OPENCLAW_GATEWAY_TOKEN=...
 TELEGRAM_BOT_TOKEN=...
 KIMI_API_KEY=...
-ANTHROPIC_API_KEY=...
 PERPLEXITY_API_KEY=...
 OPENAI_API_KEY=...
 TZ=Europe/Moscow
@@ -196,59 +174,9 @@ TZ=Europe/Moscow
 
 Docker-compose подтягивает через `env_file: .env`. **Важно:** при изменении `.env` нужен `docker compose down && docker compose up -d openclaw-gateway` (не просто `docker restart` — он не перечитывает env).
 
-## Мульти-агенты
-
-Один Gateway может хостить несколько изолированных агентов. Каждый агент — отдельный "мозг" со своим workspace, моделью, heartbeat и историей сессий.
-
-### Текущая конфигурация
-
-| Агент | displayName | Модель | Назначение |
-|-------|-------------|--------|------------|
-| `main` | FoodHelper | `kimi-coding/k2p5` | Питание, ВкусВилл, семейный чат |
-| `familyoffice` | FamilyOffice | `anthropic/claude-sonnet-4-5` | Организация, фотосессии, семейный офис |
-
-### Bindings (маршрутизация)
-
-Bindings определяют какой агент обслуживает какой чат:
-
-```json
-"bindings": [
-  {
-    "agentId": "familyoffice",
-    "match": {
-      "channel": "telegram",
-      "peer": { "kind": "group", "id": "-100XXXXXXXXXX" }
-    }
-  }
-]
-```
-
-Всё что не попало в bindings — идёт к default-агенту (main/FoodHelper).
-
-### Добавить нового агента
-
-1. Добавить в `agents.list` в `openclaw.json`
-2. Создать workspace: `mkdir /opt/openclaw/config/workspace-<name>`
-3. Написать `AGENTS.md` в workspace
-4. Создать agent dir: `mkdir -p /opt/openclaw/config/agents/<name>/agent`
-5. Создать `auth-profiles.json` (или оставить пустым `{"profiles":[]}` — будет использовать env)
-6. **Важно:** `chown -R 1000:1000` на workspace и agent dir (контейнер бежит от uid=1000)
-7. Добавить binding если нужно
-8. `docker restart openclaw-gateway`
-
-### Auth-profiles: изоляция ключей
-
-Каждый агент читает свой `auth-profiles.json`:
-```
-~/.openclaw/agents/main/agent/auth-profiles.json          → Kimi key
-~/.openclaw/agents/familyoffice/agent/auth-profiles.json   → Anthropic key
-```
-Если `auth-profiles.json` пустой (`{"profiles":[]}`), агент берёт ключ из env-переменных.
-
 ## Провайдер LLM
 
-Текущий для main: **Kimi Coding** (`kimi-coding/k2p5`) — встроенный провайдер OpenClaw.
-FamilyOffice: **Anthropic Claude Sonnet 4.5** (`anthropic/claude-sonnet-4-5`).
+Текущий: **Kimi Coding** (`kimi-coding/k2p5`) — встроенный провайдер OpenClaw.
 
 ### Как настроен Kimi Coding
 
@@ -264,8 +192,9 @@ Kimi Coding — Anthropic-совместимый API от Moonshot AI. OpenClaw 
 **Важные нюансы (грабли, на которые мы наступили):**
 
 - `ANTHROPIC_BASE_URL` env-переменная **не работает** в OpenClaw — он игнорирует её. Базовый URL задаётся только через `models.providers` в конфиге или через встроенный провайдер.
-- `auth-profiles.json` имеет приоритет над env-переменными. Если там старый ключ — он будет использоваться.
-- Встроенный провайдер `kimi-coding` — самый простой путь. Он сам знает правильный endpoint.
+- Нельзя хакнуть через `anthropic` провайдер с подменой base URL — OpenClaw требует `models` массив и всё равно может брать ключ из `auth-profiles.json`.
+- `auth-profiles.json` (`config/agents/main/agent/auth-profiles.json`) имеет приоритет над env-переменными. Если там старый ключ — он будет использоваться.
+- Встроенный провайдер `kimi-coding` — самый простой путь. Он сам знает правильный endpoint (`https://api.kimi.com/coding/`).
 
 **Файлы, которые нужно согласовать:**
 ```
@@ -286,12 +215,10 @@ cd /opt/openclaw && docker compose down && docker compose up -d openclaw-gateway
 ## Allowlist (кто может писать боту)
 
 В `openclaw.json` → `channels.telegram`:
-```json
-"allowFrom": ["<TELEGRAM_USER_ID>", "<TELEGRAM_USERNAME>"]
-```
+- `groupAllowFrom`: ["6488767", "117054118", "108642608"]
+- `allowFrom`: ["6488767", "117054118", "108642608"]
 
-- **`allowFrom`** — кто может взаимодействовать с ботом. Принимает числовые Telegram ID и юзернеймы. Влияет и на ЛС, и на группы — пользователь не из списка не сможет вызвать бота даже через @mention в группе.
-- **`groupAllowFrom`** (опционально) — отдельный список для групп. Если не указано, используется `allowFrom`. Настройка глобальная (на все группы), per-group фильтрации нет.
+Участники: Саша (6488767), Ангелина (117054118), Даша (108642608).
 
 ## Голосовые сообщения
 
@@ -327,15 +254,48 @@ cd /opt/openclaw && docker compose down && docker compose up -d openclaw-gateway
 
 Сервер: `https://mcp001.vkusvill.ru/mcp`
 
-Четыре команды через единый скрипт `vkusvill.sh`:
-- `search` — поиск (q, page, sort)
-- `details` — детали + КБЖУ (id)
-- `check` — проверка наличия по адресу доставки (id или URL)
-- `cart` — ссылка на корзину (products: [{xml_id, q}])
+Три инструмента:
+- `vkusvill_products_search` — поиск (q, page, sort)
+- `vkusvill_product_details` — детали + КБЖУ (id)
+- `vkusvill_cart_link_create` — ссылка на корзину (products: [{xml_id, q}])
+
+Скрипт-обёртка: `/opt/openclaw/workspace/skills/vkusvill/vkusvill.sh` (подкоманды: search, details, check, cart)
+
+### VV MCP Client (persistent MCP-сессия)
+
+Python-микросервис на хосте, держит одну MCP-сессию и проксирует запросы от бота. Решает проблему 502 Bad Gateway при последовательных вызовах (search → details), которая возникала из-за создания новой MCP-сессии на каждый запрос.
+
+| Параметр | Значение |
+|----------|----------|
+| Файл | `/opt/openclaw/vv-mcp-client.py` |
+| Systemd | `vv-mcp-client.service` |
+| Порт | 18791 (bind 0.0.0.0, UFW ограничен Docker-сетями) |
+| RAM | ~10-15 MB |
+| Зависимости | Python 3 stdlib (без pip) |
+
+API:
+- `GET /search?q=...&page=1&sort=popularity`
+- `GET /details?id=...`
+- `POST /cart` (body: `{"products": [...]}`)
+- `GET /health`
+
+```bash
+# Управление
+systemctl status vv-mcp-client
+systemctl restart vv-mcp-client
+journalctl -u vv-mcp-client -f
+
+# Тест
+curl http://127.0.0.1:18791/health
+curl 'http://127.0.0.1:18791/search?q=творог'
+curl 'http://127.0.0.1:18791/details?id=27695'
+```
+
+Автореконнект: при 502/503/504/timeout переоткрывает MCP-сессию (до 2 ретраев). Сессия обновляется каждые 5 минут (SESSION_TTL).
 
 ### Проверка наличия по адресу
 
-Puppeteer-микросервис на хосте (вне Docker). Подробная документация: [`vv-checker/README.md`](vv-checker/README.md).
+Puppeteer-микросервис на хосте (вне Docker). Подробная документация: `VV-CHECKER.md`.
 
 ```bash
 # Из Docker (бот вызывает через vkusvill.sh check):
@@ -345,7 +305,7 @@ curl http://host.docker.internal:18790/check?url=https://vkusvill.ru/goods/xmlid
 curl http://127.0.0.1:18790/check?url=https://vkusvill.ru/goods/xmlid/98052
 ```
 
-Тест:
+### Тест всех подкоманд
 ```bash
 /opt/openclaw/workspace/skills/vkusvill/vkusvill.sh search "молоко"
 /opt/openclaw/workspace/skills/vkusvill/vkusvill.sh details 27695
