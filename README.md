@@ -21,7 +21,12 @@
 │   └── agents/main/sessions/   # Сессии (история чатов)
 ├── workspace/
 │   ├── AGENTS.md               # Персона бота (тон, поведение, правила)
+│   ├── SOUL.md                 # Характер, границы, security rules
+│   ├── USER.md                 # Профили членов семьи
+│   ├── MEMORY.md               # Долгосрочная память (предпочтения, даты)
 │   ├── IDENTITY.md             # Имя и эмодзи
+│   ├── HEARTBEAT.md            # Периодические задачи + самоочистка
+│   ├── TOOLS.md                # Заметки по форматированию
 │   └── skills/vkusvill/
 │       ├── SKILL.md            # Инструкция для бота по ВкусВилл
 │       └── vkusvill.sh         # Скрипт-обёртка (вызывает vv-mcp-client + Puppeteer)
