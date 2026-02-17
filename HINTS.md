@@ -141,7 +141,6 @@ docker logs openclaw-gateway --tail 5
     "web": {
       "search": {
         "provider": "perplexity",
-        "apiKey": "${PERPLEXITY_API_KEY}",
         "maxResults": 5,
         "timeoutSeconds": 30,
         "perplexity": {
@@ -157,6 +156,8 @@ docker logs openclaw-gateway --tail 5
 ```
 
 3. Добавить `PERPLEXITY_API_KEY=pplx-...` в `.env`
+
+**Важно:** `apiKey` в JSON **не нужен** — OpenClaw автоматически подхватывает `PERPLEXITY_API_KEY` из env. Не хардкодить ключ в конфиге.
 
 **Ключевой момент:** без `"perplexity": {"model": "sonar-pro"}` будет ошибка `Invalid model 'perplexity/sonar-pro'`. Настройка `tools.web.search.perplexity.model` скрытая — нет в документации, нашли в исходниках.
 
