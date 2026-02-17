@@ -135,6 +135,7 @@ Gateway token:
 | DM policy | allowlist | openclaw.json |
 | DM scope | per-channel-peer (изоляция сессий) | openclaw.json |
 | Группы | requireMention: true | openclaw.json |
+| Tools write/edit | разрешены (бот может писать в workspace) | openclaw.json |
 | Sandbox | off (внутри Docker) | openclaw.json |
 | mDNS | off | openclaw.json |
 | Модель | kimi-coding/k2p5 | openclaw.json |
