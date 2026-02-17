@@ -138,6 +138,7 @@ Gateway token:
 | Sandbox | off (внутри Docker) | openclaw.json |
 | mDNS | off | openclaw.json |
 | Модель | kimi-coding/k2p5 | openclaw.json |
+| Security rule | SOUL.md запрещает показ токенов в чатах | SOUL.md |
 
 ### Изоляция DM-сессий
 
