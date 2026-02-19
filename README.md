@@ -1,4 +1,4 @@
-# SashaDashaHomeBot — Администрирование
+# OpenClaw HomeBot — Администрирование
 
 ## Сервер
 
@@ -17,9 +17,19 @@
 │   ├── openclaw.json           # Главный конфиг (модель, каналы, безопасность)
 │   ├── agents/main/agent/
 │   │   └── auth-profiles.json  # API-ключ LLM-провайдера
+│   ├── agents/<agent-name>/    # Доп. агенты (свои сессии, agent/)
+│   │   ├── agent/
+│   │   └── sessions/
 │   ├── credentials/            # Telegram allowlists, pairing
-│   └── agents/main/sessions/   # Сессии (история чатов)
-├── workspace/
+│   ├── agents/main/sessions/   # Сессии (история чатов)
+│   ├── workspace-<agent-name>/ # Workspace доп. агента (AGENTS.md, skills/ и т.д.)
+│   └── scheduler/              # Задачи планировщика
+│       ├── tasks-main.json     # Задачи для агента main
+│       └── tasks-<agent-name>.json  # Задачи для доп. агента
+├── scheduler/
+│   ├── scheduler-daemon.py     # Демон-планировщик (systemd)
+│   └── scheduler.sh            # CLI для управления задачами (копируется в workspace каждого агента)
+├── workspace/                  # Workspace агента main
 │   ├── AGENTS.md               # Персона бота (тон, поведение, правила)
 │   ├── SOUL.md                 # Характер, границы, security rules
 │   ├── USER.md                 # Профили членов семьи
@@ -76,7 +86,7 @@ docker restart openclaw-gateway
 
 ## Telegram
 
-- **Бот:** @sashadashahomebot
+- **Бот:** @yourbotname
 - **DM Policy:** allowlist (только пользователи из списка)
 - **Группы:** отвечает только на @упоминания и реплаи
 
@@ -86,9 +96,9 @@ docker exec openclaw-gateway node dist/index.js pairing approve telegram <КОД
 ```
 
 ### Добавить бота в группу
-1. Добавить @sashadashahomebot в группу
+1. Добавить @yourbotname в группу
 2. Сделать админом (чтобы видел все сообщения) или отключить Privacy Mode через @BotFather → /setprivacy → Disable
-3. Тегать через @sashadashahomebot для вызова
+3. Тегать через @yourbotname для вызова
 
 ### Ограничить конкретной группой
 В `openclaw.json` заменить `"*"` на ID группы:
@@ -100,6 +110,222 @@ docker exec openclaw-gateway node dist/index.js pairing approve telegram <КОД
 }
 ```
 
+## Multi-agent (несколько агентов)
+
+OpenClaw поддерживает несколько агентов в одном инстансе. Каждый агент — изолированная сущность со своими сессиями, workspace, моделью и целевым чатом.
+
+### Зачем
+
+- Разные задачи — разные агенты (например, один для продуктов, другой для семейных финансов)
+- Разные группы в Telegram → разные агенты с отдельным контекстом
+- Разные модели (один агент на дешёвой модели для рутины, другой на сильной для сложного)
+
+### Как добавить второго агента
+
+1. **Workspace** — создать отдельную директорию с bootstrap-файлами:
+```bash
+mkdir -p /opt/openclaw/config/workspace-<agent-name>
+# Создать: AGENTS.md, IDENTITY.md, HEARTBEAT.md и т.д.
+```
+
+2. **Объявить агента в `openclaw.json`** → `agents.list`:
+```json
+{
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "HomeHelper"
+      },
+      {
+        "id": "<agent-name>",
+        "name": "SecondAgent",
+        "workspace": "~/.openclaw/workspace-<agent-name>",
+        "model": { "primary": "kimi-coding/k2p5" },
+        "heartbeat": {
+          "every": "15m",
+          "target": "telegram",
+          "to": "<group-chat-id>",
+          "activeHours": { "start": "08:00", "end": "23:00", "timezone": "Europe/Moscow" }
+        }
+      }
+    ]
+  }
+}
+```
+
+3. **Binding** — привязать группу к агенту:
+```json
+{
+  "bindings": [
+    {
+      "agentId": "<agent-name>",
+      "match": {
+        "channel": "telegram",
+        "peer": { "kind": "group", "id": "<group-chat-id>" }
+      }
+    }
+  ]
+}
+```
+Все сообщения из этой группы пойдут к нужному агенту. `main` остаётся дефолтным для всех остальных чатов.
+
+4. **Hooks API** — разрешить обоих агентов:
+```json
+{
+  "hooks": {
+    "enabled": true,
+    "token": "<hooks-token>",
+    "allowedAgentIds": ["main", "<agent-name>"]
+  }
+}
+```
+
+5. **Volume mount** — добавить в `docker-compose.yml`:
+```yaml
+volumes:
+  - /opt/openclaw/config/workspace-<agent-name>:/home/node/.openclaw/workspace-<agent-name>
+```
+
+6. **Рестарт:**
+```bash
+cd /opt/openclaw && docker compose down && docker compose up -d openclaw-gateway
+```
+
+### Per-agent allowlists
+
+Каждый агент наследует общие `allowFrom` / `groupAllowFrom`. Binding определяет только маршрутизацию, а не доступ. Пользователи из allowlist могут писать любому агенту напрямую через hooks API (с указанием `agentId`).
+
+### Пути workspace (host → Docker)
+
+| Агент | Host | Docker |
+|-------|------|--------|
+| main | `/opt/openclaw/workspace/` | `/home/node/.openclaw/workspace/` |
+| \<agent-name\> | `/opt/openclaw/config/workspace-<agent-name>/` | `/home/node/.openclaw/workspace-<agent-name>/` |
+
+---
+
+## Scheduler (планировщик задач)
+
+Внешний демон, который запускает задачи по расписанию через hooks API OpenClaw. В отличие от встроенного heartbeat (периодический, нельзя задать точное время), scheduler поддерживает cron-выражения и одноразовые события.
+
+### Архитектура
+
+```
+┌─────────────────────┐     POST /hooks/agent     ┌──────────────────┐
+│  scheduler-daemon.py │ ──────────────────────── │  OpenClaw Gateway │
+│  (systemd на хосте)  │     127.0.0.1:18789      │  (Docker)         │
+└─────────────────────┘                            └──────────────────┘
+         │
+         │ читает
+         ▼
+   config/scheduler/
+   ├── tasks-main.json
+   └── tasks-<agent-name>.json
+```
+
+- **systemd-сервис** на хосте (вне Docker)
+- Проверяет задачи каждые 30 секунд, дедупликация до 1 раза в минуту (против двойного срабатывания cron)
+- Сканирует `tasks-*.json` в директории — один файл на каждого агента
+- Зависимости: только Python 3 stdlib (без pip)
+- Часовой пояс: Europe/Moscow (UTC+3)
+
+### Формат файла задач
+
+`config/scheduler/tasks-<agent-id>.json`:
+
+```json
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "a1b2c3d4",
+      "name": "Напомни проверить задачи",
+      "prompt": "Проверь HEARTBEAT.md и напомни если есть активные задачи",
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 9 * * 1-5"
+      },
+      "enabled": true,
+      "agentId": "<agent-id>",
+      "channel": "telegram",
+      "to": "<group-chat-id>",
+      "runCount": 0,
+      "lastRunAt": null,
+      "maxRuns": null,
+      "timeoutSeconds": 120
+    }
+  ]
+}
+```
+
+**Виды расписаний (`schedule.kind`):**
+
+| Kind | Формат | Пример |
+|------|--------|--------|
+| `cron` | 5-полей (мин час дм мес дн) | `"0 9 * * *"` — каждый день в 9:00 |
+| `every` | `everySeconds: N` | `"everySeconds": 3600` — каждый час |
+| `at` | ISO 8601 | `"2026-03-01T10:00"` — одноразово |
+
+Одноразовые (`at`) задачи автоматически отключаются после выполнения. Задачи с `maxRuns` отключаются после N запусков.
+
+### CLI (scheduler.sh)
+
+Скрипт `scheduler.sh` разворачивается в workspace каждого агента как скилл. Бот может управлять расписанием через этот инструмент.
+
+```bash
+scheduler.sh list                          # Показать все задачи
+scheduler.sh add --name "..." --cron "0 9 * * *" --prompt "..." \
+  [--agent main] [--channel telegram] [--to "<chat-id>"] [--max-runs 5]
+scheduler.sh add --name "..." --every 3600 --prompt "..."
+scheduler.sh add --name "..." --at "2026-03-01T10:00" --prompt "..."
+scheduler.sh remove --id "a1b2c3d4"
+scheduler.sh enable --id "a1b2c3d4"
+scheduler.sh disable --id "a1b2c3d4"
+scheduler.sh status                        # Кол-во задач + статус демона
+```
+
+### Systemd
+
+```ini
+[Unit]
+Description=OpenClaw Scheduler Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/openclaw/scheduler/scheduler-daemon.py
+Environment=SCHEDULER_TASKS_DIR=/opt/openclaw/config/scheduler
+Environment=SCHEDULER_GATEWAY=http://127.0.0.1:18789
+Environment=SCHEDULER_HOOKS_TOKEN=<hooks-token>
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl enable scheduler-daemon
+systemctl start scheduler-daemon
+journalctl -u scheduler-daemon -f   # логи
+```
+
+### Права на файлы задач
+
+Файлы в `config/scheduler/` должны быть доступны и демону (root/systemd), и Docker-контейнеру (claudeuser, uid=1000):
+
+```bash
+chown -R 1000:1000 /opt/openclaw/config/scheduler/
+chmod 755 /opt/openclaw/config/scheduler/
+chmod 644 /opt/openclaw/config/scheduler/tasks-*.json
+```
+
+---
+
 ## Веб-админка
 
 Доступна через SSH-туннель:
@@ -110,10 +336,7 @@ ssh -L 18789:127.0.0.1:18789 <user>@<IP-сервера>
 
 Открыть: http://localhost:18789
 
-Gateway token:
-```
-5900ad829ff0c05e31954e9e32ca82bc147412fb5d2f49fd054de66c80f0629e
-```
+Gateway token: значение из `openclaw.json` → `gateway.auth.token` (или `OPENCLAW_GATEWAY_TOKEN` из `.env`).
 
 ## Heartbeat (автопробуждение)
 
@@ -145,6 +368,8 @@ Gateway token:
 | mDNS | off | openclaw.json |
 | Модель | kimi-coding/k2p5 | openclaw.json |
 | Security rule | SOUL.md запрещает показ токенов в чатах | SOUL.md |
+
+> **`--network host` и внешние hooks.** Если scheduler-daemon (или другой внешний клиент) вызывает hooks API на `127.0.0.1:18789`, а контейнер запущен в bridge mode — gateway внутри контейнера биндится на `127.0.0.1` **внутри своего network namespace**, и хостовый `127.0.0.1` до него не добирается. Симптом: `Broken pipe` / `Empty reply from server`. Решение: запускать контейнер с `--network host` (или с `-p 127.0.0.1:18789:18789` при bridge mode, если gateway биндит `0.0.0.0` внутри). С `--network host` контейнер делит сетевой стек с хостом — `127.0.0.1` один и тот же.
 
 ### Изоляция DM-сессий
 
@@ -230,10 +455,10 @@ cd /opt/openclaw && docker compose down && docker compose up -d openclaw-gateway
 ## Allowlist (кто может писать боту)
 
 В `openclaw.json` → `channels.telegram`:
-- `groupAllowFrom`: ["6488767", "117054118", "108642608"]
-- `allowFrom`: ["6488767", "117054118", "108642608"]
+- `groupAllowFrom`: ["<user-id-1>", "<user-id-2>", ...]
+- `allowFrom`: ["<user-id-1>", "<user-id-2>", ...]
 
-Участники: Саша (6488767), Ангелина (117054118), Даша (108642608).
+Telegram user ID можно узнать через @userinfobot или из логов бота.
 
 ## Голосовые сообщения
 

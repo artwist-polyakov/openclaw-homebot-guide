@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenClaw Scheduler Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/openclaw/scheduler/scheduler-daemon.py
+Environment=SCHEDULER_TASKS_DIR=/opt/openclaw/config/scheduler
+Environment=SCHEDULER_GATEWAY=http://127.0.0.1:18789
+Environment=SCHEDULER_HOOKS_TOKEN=<hooks-token>
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

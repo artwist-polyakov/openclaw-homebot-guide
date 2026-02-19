@@ -1,2 +1,2 @@
-name: SashaDashaHomeBot
+name: HomeBot
 emoji: 🏠

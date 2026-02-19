@@ -316,8 +316,8 @@ cd /opt/openclaw && docker compose down && docker compose up -d openclaw-gateway
 
 **Нюанс `target`:**
 - `"last"` — последний активный чат (группа или DM — зависит от контекста). Самый гибкий вариант для семейного бота.
-- `"telegram"` + `"to": "6488767"` — всегда в DM конкретному пользователю
-- `"telegram"` + `"to": "-100XXXXXXXXXX"` — всегда в конкретную группу
+- `"telegram"` + `"to": "<user-id>"` — всегда в DM конкретному пользователю
+- `"telegram"` + `"to": "<group-chat-id>"` — всегда в конкретную группу
 
 **Важно:** `target` управляет только **алертами**. Если бот отвечает `HEARTBEAT_OK` — ничего никуда не доставляется (нет спама). Алерт уходит только когда бот решил что-то сказать.
 
@@ -493,3 +493,66 @@ journalctl -u vv-mcp-client -f
   }
 }
 ```
+
+---
+
+## Docker bridge mode + hooks API = Broken pipe
+
+**Проблема:** Внешний сервис на хосте (scheduler-daemon, cURL, скрипт) вызывает `POST http://127.0.0.1:18789/hooks/agent`, а в ответ получает `Broken pipe` или `Empty reply from server`.
+
+**Причина:** Gateway внутри Docker биндится на `127.0.0.1`, но в bridge mode контейнер имеет свой network namespace. Хостовый `127.0.0.1` — это не то же самое, что `127.0.0.1` внутри контейнера. Порт-маппинг `-p 127.0.0.1:18789:18789` в bridge mode сработает, только если gateway слушает `0.0.0.0` внутри (а OpenClaw по умолчанию биндит loopback).
+
+**Решение:** Запустить контейнер с `--network host`:
+```yaml
+# docker-compose.yml
+services:
+  openclaw-gateway:
+    network_mode: host
+```
+С `--network host` контейнер делит сетевой стек с хостом — `127.0.0.1` общий, gateway доступен напрямую.
+
+**Побочный эффект:** `host.docker.internal` перестаёт работать (это механизм bridge mode). Сервисы на хосте (vv-mcp-client, vv-checker) теперь доступны через `127.0.0.1` вместо `host.docker.internal`.
+
+---
+
+## Дублирование уведомлений в hooks.ts
+
+**Проблема:** При отправке задачи через hooks API с указанием `agentId` и `to` (целевой чат) — сообщение доставляется и в целевой чат, и в дефолтный чат main-агента. Дубль.
+
+**Причина:** Announce-flow OpenClaw маршрутизирует результат cron/hooks через main session агента. Если `delivered` флаг не проставлен корректно, announce flow дополнительно публикует результат в дефолтный канал.
+
+**Ключевой механизм:** В `RunCronAgentTurnResult` есть поле `delivered: boolean`. Когда `true` — вызывающий код должен пропустить публикацию в main session. Баг: в некоторых путях выполнения `delivered` не проставляется, и announce flow дублирует доставку.
+
+**Upstream:** Фиксы в коммитах:
+- `d833dcd73` — fix(telegram): cron and heartbeat messages land in wrong chat instead of target topic
+- `bc67af6ad` — cron: separate webhook POST delivery from announce
+
+**Решение:** Обновить OpenClaw до версии, включающей эти фиксы. Проверить:
+```bash
+cd /opt/openclaw/repo && git log --oneline | grep -i "wrong chat\|duplicate\|delivered"
+```
+
+**Workaround (до обновления):** Патч `src/gateway/server/hooks.ts` — добавить guard `!result.delivered` перед announce flow, чтобы при уже доставленном результате не публиковать повторно.
+
+---
+
+## `host.docker.internal` не работает с `--network host`
+
+**Проблема:** Скрипты внутри контейнера (например, `vkusvill.sh`) обращаются к хостовым сервисам через `host.docker.internal:18791`. После переключения контейнера на `--network host` эти запросы перестают работать — `curl: (6) Could not resolve host: host.docker.internal`.
+
+**Причина:** `host.docker.internal` — механизм Docker bridge mode. Он добавляется в `/etc/hosts` контейнера при bridge networking. С `--network host` контейнер использует сетевой стек хоста напрямую — DNS-записи `host.docker.internal` нет.
+
+**Решение:** Заменить `host.docker.internal` на `127.0.0.1` во всех скриптах внутри контейнера:
+```bash
+# Было:
+VV_MCP_HOST="http://host.docker.internal:18791"
+PUPPETEER_HOST="http://host.docker.internal:18790"
+
+# Стало:
+VV_MCP_HOST="http://127.0.0.1:18791"
+PUPPETEER_HOST="http://127.0.0.1:18790"
+```
+
+**Важно:** менять нужно и внутри контейнера, и в исходном файле на хосте (volume mount), иначе при пересоздании контейнера вернётся старая версия.
+
+**Связано с:** "Docker bridge mode + hooks API = Broken pipe" (выше) — обе проблемы возникают при переходе на `--network host`.
