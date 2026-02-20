@@ -556,3 +556,54 @@ PUPPETEER_HOST="http://127.0.0.1:18790"
 **Важно:** менять нужно и внутри контейнера, и в исходном файле на хосте (volume mount), иначе при пересоздании контейнера вернётся старая версия.
 
 **Связано с:** "Docker bridge mode + hooks API = Broken pipe" (выше) — обе проблемы возникают при переходе на `--network host`.
+
+---
+
+## Hooks: `pairing required` после обновления
+
+**Проблема:** После обновления OpenClaw (`git pull` + `docker build` + restart) хуки принимают запросы (`{"ok": true, "runId": "..."}`), но субагенты не запускаются. В логах:
+```
+gateway connect failed: Error: pairing required
+Subagent completion direct announce failed: gateway closed (1008): pairing required
+```
+
+**Причина:** Новая версия OpenClaw может потребовать `operator.write` scope для запуска субагентов через hooks API. После обновления спаренное устройство в `paired.json` имеет только `admin, approvals, pairing` scope — без `write`. Gateway создаёт pending запрос на добавление scope, но его некому одобрить автоматически.
+
+**Диагностика:**
+```bash
+# Проверить pending запросы
+cat <config-dir>/devices/pending.json
+# Если есть запрос с "scopes": ["operator.write"] — это оно
+
+# Проверить текущие scopes устройства
+cat <config-dir>/devices/paired.json | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for dev_id, dev in d.items():
+    print(f'{dev_id}: scopes={dev.get(\"scopes\")}')"
+# Если нет operator.write — проблема найдена
+```
+
+**Решение:** Добавить `operator.write` scope вручную:
+```bash
+python3 -c "
+import json
+for path in ['<config-dir>/devices/paired.json']:
+    with open(path) as f: d = json.load(f)
+    for dev in d.values():
+        if 'operator.write' not in dev.get('scopes', []):
+            dev['scopes'].append('operator.write')
+        for tok in dev.get('tokens', {}).values():
+            if 'operator.write' not in tok.get('scopes', []):
+                tok['scopes'].append('operator.write')
+    with open(path, 'w') as f: json.dump(d, f, indent=2)
+# Очистить pending
+with open('<config-dir>/devices/pending.json', 'w') as f:
+    json.dump({}, f, indent=2)
+"
+
+# Перезапустить контейнер
+docker compose restart
+```
+
+**Симптом-обманка:** `{"ok": true}` в ответе hooks API создаёт впечатление, что всё работает. Ошибка `pairing required` появляется только в docker-логах при попытке запустить субагент.
