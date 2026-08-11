@@ -1,3 +1,5 @@
+
+
 # OpenClaw HomeBot — Администрирование
 
 ## Сервер
@@ -539,7 +541,7 @@ Puppeteer-микросервис на хосте (вне Docker). Подробн
 
 ```bash
 # Из Docker (бот вызывает через vkusvill.sh check):
-curl http://host.docker.internal:18790/check?url=https://vkusvill.ru/goods/xmlid/98052
+curl http://127.0.0.1:18790/check?url=https://vkusvill.ru/goods/xmlid/98052
 
 # С сервера напрямую:
 curl http://127.0.0.1:18790/check?url=https://vkusvill.ru/goods/xmlid/98052
